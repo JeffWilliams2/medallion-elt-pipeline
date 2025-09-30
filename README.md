@@ -59,6 +59,9 @@ DROP database if exists dbt_db;
 DROP role if exists dbt_role;
 ```
 
+![Snowflake RBAC Setup](include/images/img_1.png)
+*Snowflake warehouse permissions and role configuration*
+
 ## Step 2: Configure dbt_profile.yaml
 
 ```yaml
@@ -71,6 +74,7 @@ models:
       materialized: table
       snowflake_warehouse: dbt_wh
 ```
+![DBT Config](include/images/img_2.png)
 
 ## Step 3: Create source and staging files
 ### Create: models/staging/tpch_sources.yml
@@ -134,6 +138,9 @@ FROM
 {% endmacro %}
 ```
 
+![dbt run](include/images/img_3.png)
+*dbt run*
+
 ## Step 5: Transform Models (Fact Tables, Data Marts)
 ### Create: models/marts/int_order_items.sql 
 ```sql
@@ -180,6 +187,9 @@ JOIN
 ORDER BY order_date
 ```
 
+![Snowflake Data Models](include/images/img_4.png)
+*dbt run showing fact tables and staging views successful run*
+
 ## Step 6: Tests
 ### Create: models/marts/tests.yml and tests/fct_orders_discount.sql
 ```yml
@@ -218,6 +228,11 @@ WHERE
     OR DATE(order_date) < DATE('1990-01-01')
 ```
 
+![Sample Data Output](include/images/img_5.png)
+
+![DBT Test Results](include/images/img_7.png)
+
+
 ## Step 7: Deploy
 ### Update Dockerfile to deploy on Airflow
 ```dockerfile
@@ -229,3 +244,5 @@ RUN python -m venv dbt_venv && source dbt_venv/bin/activate && \
 astronomer-cosmos
 apache-airflow-providers-snowflake
 ```
+
+![DBT Deployment](include/images/img_8.png)
