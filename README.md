@@ -2,7 +2,7 @@
 
 ## Summary
 
-A data pipeline orchestrating DBT transformations with  Airflow, designed for analytics with data ingestion via Snowflake.
+A data pipeline orchestrating DBT transformations with Airflow, designed for analytics with data ingestion via Snowflake.
 
 ## Architecture 
 ![dbt](https://img.shields.io/badge/dbt-FF694B?style=for-the-badge&logo=dbt&logoColor=white)
@@ -31,7 +31,7 @@ The pipeline follows a medallion architecture with staging and mart layers, ensu
 - **Containerized Deployment**: Docker deployment with Astronomer Cosmos
 
 
-## Step 1: Setup Snowflake enviroment
+## Step 1: Setup Snowflake environment
 
 ```sql
 -- create accounts
