@@ -1,45 +1,231 @@
-Overview
-========
+# DBT + Snowflake Data Pipeline
 
-Welcome to Astronomer! This project was generated after you ran 'astro dev init' using the Astronomer CLI. This readme describes the contents of the project, as well as how to run Apache Airflow on your local machine.
+## Summary
 
-Project Contents
-================
+A data pipeline orchestrating DBT transformations with  Airflow, designed for analytics with data ingestion via Snowflake.
 
-Your Astro project contains the following files and folders:
+## Architecture 
+![dbt](https://img.shields.io/badge/dbt-FF694B?style=for-the-badge&logo=dbt&logoColor=white)
+![Snowflake](https://img.shields.io/badge/Snowflake-29B5E8?style=for-the-badge&logo=snowflake&logoColor=white)
+![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-017CEE?style=for-the-badge&logo=Apache%20Airflow&logoColor=white)
 
-- dags: This folder contains the Python files for your Airflow DAGs. By default, this directory includes one example DAG:
-    - `example_astronauts`: This DAG shows a simple ETL pipeline example that queries the list of astronauts currently in space from the Open Notify API and prints a statement for each astronaut. The DAG uses the TaskFlow API to define tasks in Python, and dynamic task mapping to dynamically print a statement for each astronaut. For more on how this DAG works, see our [Getting started tutorial](https://www.astronomer.io/docs/learn/get-started-with-airflow).
-- Dockerfile: This file contains a versioned Astro Runtime Docker image that provides a differentiated Airflow experience. If you want to execute other commands or overrides at runtime, specify them here.
-- include: This folder contains any additional files that you want to include as part of your project. It is empty by default.
-- packages.txt: Install OS-level packages needed for your project by adding them to this file. It is empty by default.
-- requirements.txt: Install Python packages needed for your project by adding them to this file. It is empty by default.
-- plugins: Add custom or community plugins for your project to this file. It is empty by default.
-- airflow_settings.yaml: Use this local-only file to specify Airflow Connections, Variables, and Pools instead of entering them in the Airflow UI as you develop DAGs in this project.
+- **DBT (Data Build Tool)** for SQL-based data transformations and modeling 
+- **Snowflake** as the cloud data warehouse platform
+- **Astronomer Cosmos** for Airflow integration
 
-Deploy Your Project Locally
-===========================
+The pipeline follows a medallion architecture with staging and mart layers, ensuring data quality through automated testing and maintaining separation between raw data ingestion and business logic implementation.
 
-Start Airflow on your local machine by running 'astro dev start'.
+## Features
 
-This command will spin up five Docker containers on your machine, each for a different Airflow component:
+### Data Transformation Pipeline
+- **Staging Layer**: Raw data ingestion and basic cleaning from the datasource
+- **Marts Layer**: Business logic implementation with fact and dimension tables
+- **Macros**: SQL functions for pricing calculations and data transformations
 
-- Postgres: Airflow's Metadata Database
-- Scheduler: The Airflow component responsible for monitoring and triggering tasks
-- DAG Processor: The Airflow component responsible for parsing DAGs
-- API Server: The Airflow component responsible for serving the Airflow UI and API
-- Triggerer: The Airflow component responsible for triggering deferred tasks
+### Orchestration Capabilities
+- **Daily Scheduling**: Automated pipeline execution with configurable intervals
+- **Monitoring**: Comprehensive logging and alerting through Airflow UI
 
-When all five containers are ready the command will open the browser to the Airflow UI at http://localhost:8080/. You should also be able to access your Postgres Database at 'localhost:5432/postgres' with username 'postgres' and password 'postgres'.
+### Technical Implementation
+- **Cloud Design**: Optimized for Snowflake data warehouse operations
+- **Containerized Deployment**: Docker deployment with Astronomer Cosmos
 
-Note: If you already have either of the above ports allocated, you can either [stop your existing Docker containers or change the port](https://www.astronomer.io/docs/astro/cli/troubleshoot-locally#ports-are-not-available-for-my-local-airflow-webserver).
 
-Deploy Your Project to Astronomer
-=================================
+## Step 1: Setup Snowflake enviroment
 
-If you have an Astronomer account, pushing code to a Deployment on Astronomer is simple. For deploying instructions, refer to Astronomer documentation: https://www.astronomer.io/docs/astro/deploy-code/
+```sql
+-- create accounts
+USE ROLE accountadmin;
 
-Contact
-=======
+CREATE warehouse dbt_wh WITH warehouse_size='x-small';
+CREATE database if not exists dbt_db;
+CREATE role if not exists dbt_role;
 
-The Astronomer CLI is maintained with love by the Astronomer team. To report a bug or suggest a change, reach out to our support.
+show grants ON warehouse dbt_wh;
+
+GRANT role dbt_role to user jazzyjeff;
+GRANT usage ON warehouse dbt_wh to role dbt_role;
+GRANT all ON database dbt_db to role dbt_role;
+
+USE role dbt_role;
+
+CREATE schema if not exists dbt_db.dbt_schema;
+
+-- clean up
+USE role accountadmin;
+
+DROP warehouse if exists dbt_wh;
+DROP database if exists dbt_db;
+DROP role if exists dbt_role;
+```
+
+## Step 2: Configure dbt_profile.yaml
+
+```yaml
+models:
+  snowflake_workshop:
+    staging:
+      materialized: view
+      snowflake_warehouse: dbt_wh
+    marts:
+      materialized: table
+      snowflake_warehouse: dbt_wh
+```
+
+## Step 3: Create source and staging files
+### Create: models/staging/tpch_sources.yml
+```yaml
+version: 2
+
+sources:
+  - name: tpch
+    database: snowflake_sample_data
+    schema: tpch_sf1
+    tables:
+      - name: orders
+        columns:
+          - name: o_orderkey
+            tests:
+              - unique
+              - not_null
+      - name: lineitem
+        columns:
+          - name: l_orderkey
+            tests:
+              - relationships:
+                  to: source('tpch', 'orders')
+                  field: o_orderkey
+```
+### Create: models/staging/stg_tpch_orders.sql
+```SQL
+SELECT
+    o_orderkey AS order_key,
+    o_custkey AS customer_key,
+    o_orderstatus AS status_code,
+    o_totalprice AS total_price,
+    o_orderdate AS order_date
+FROM
+    {{ source('tpch', 'orders') }}
+```
+### Create: models/staging/tpch/stg_tpch_line_items.sql
+```sql
+SELECT
+    {{
+        dbt_utils.generate_surrogate_key([
+            'l_orderkey',
+            'l_linenumber'
+        ])
+    }} AS order_item_key,
+	l_orderkey AS order_key,
+	l_partkey AS part_key,
+	l_linenumber AS line_number,
+	l_quantity AS quantity,
+	l_extendedprice AS extended_price,
+	l_discount AS discount_percentage,
+	l_tax AS tax_rate
+FROM
+    {{ source('tpch', 'lineitem') }}
+```
+## Step 4: Macros
+### Create: macros/pricing.sql
+```sql
+{% macro discounted_amount(extended_price, discount_percentage, scale=2) %}
+    (-1 * {{extended_price}} * {{discount_percentage}})::decimal(16, {{ scale }})
+{% endmacro %}
+```
+
+## Step 5: Transform Models (Fact Tables, Data Marts)
+### Create: models/marts/int_order_items.sql 
+```sql
+SELECT
+    line_item.order_item_key,
+    line_item.part_key,
+    line_item.line_number,
+    line_item.extended_price,
+    orders.order_key,
+    orders.customer_key,
+    orders.order_date,
+    {{ discounted_amount('line_item.extended_price', 'line_item.discount_percentage') }} AS item_discount_amount
+FROM
+    {{ ref('stg_tpch_orders') }} AS orders
+JOIN
+    {{ ref('stg_tpch_line_items') }} AS line_item
+        ON orders.order_key = line_item.order_key
+ORDER BY
+    orders.order_date
+```
+### Create marts/int_order_items_summary.sql to aggregate info
+```sql
+SELECT 
+    order_key,
+    sum(extended_price) AS gross_item_sales_amount,
+    sum(item_discount_amount) AS item_discount_amount
+FROM
+    {{ ref('int_order_items') }}
+GROUP BY
+    order_key
+```
+
+### Create Fact Table: models/marts/fct_orders.sql
+```sql
+SELECT
+    orders.*,
+    order_item_summary.gross_item_sales_amount,
+    order_item_summary.item_discount_amount
+FROM
+    {{ref('stg_tpch_orders')}} AS orders
+JOIN
+    {{ref('int_order_items_summary')}} AS order_item_summary
+        ON orders.order_key = order_item_summary.order_key
+ORDER BY order_date
+```
+
+## Step 6: Tests
+### Create: models/marts/tests.yml and tests/fct_orders_discount.sql
+```yml
+models:
+  - name: fct_orders
+    columns:
+      - name: order_key
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('stg_tpch_orders')
+              field: order_key
+              severity: warn
+      - name: status_code
+        tests:
+          - accepted_values:
+              values: ['P', 'O', 'F']
+```
+```sql
+SELECT
+    *
+FROM
+    {{ref('fct_orders')}}
+WHERE
+    item_discount_amount > 0
+```
+### Create: tests/fct_orders_date_valid.sql
+```sql
+SELECT
+    *
+FROM
+    {{ref('fct_orders')}}
+WHERE
+    DATE(order_date) > CURRENT_DATE()
+    OR DATE(order_date) < DATE('1990-01-01')
+```
+
+## Step 7: Deploy
+### Update Dockerfile to deploy on Airflow
+```dockerfile
+RUN python -m venv dbt_venv && source dbt_venv/bin/activate && \
+    pip install --no-cache-dir dbt-snowflake && deactivate
+```
+### requirements.txt
+```
+astronomer-cosmos
+apache-airflow-providers-snowflake
+```
